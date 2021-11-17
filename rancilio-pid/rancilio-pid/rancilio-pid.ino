@@ -123,6 +123,17 @@ const char* pass = PASS;
 unsigned long lastWifiConnectionAttempt = millis();
 unsigned int wifiReconnects = 0; //actual number of reconnects
 
+// AP
+int softApEnabled = 0 ;
+IPAddress localIp(192, 168, 1, 1);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+const char* AP_WIFI_SSID = APWIFISSID ;
+const char* AP_WIFI_KEY = APWIFIKEY ;
+const unsigned long checkpowerofftime = 30*1000 ;
+boolean checklastpoweroffEnabled = false; 
+boolean softApEnabledcheck = false ;
+
 // OTA
 const char* OTAhost = OTAHOST;
 const char* OTApass = OTAPASS;
@@ -390,13 +401,83 @@ const unsigned long intervalDisplay = 500;
   #endif
 #endif
 
+/********************************************************
+  AP
+******************************************************/
+
+void createSoftAp()
+{
+ if (softApEnabledcheck == false)
+ {
+      WiFi.enableAP(true);
+      WiFi.softAP(AP_WIFI_SSID, AP_WIFI_KEY);
+      WiFi.softAPConfig(localIp, gateway, subnet);
+      //apActivationTime = millis();
+      //softApEnabled = 1;
+      softApEnabledcheck = true;
+      Serial.println("Set softApEnabled: 0, wifimode");
+      EEPROM.begin(1024);
+      EEPROM.put(140, 0) ;
+      EEPROM.commit();
+      Serial.printf("AccessPoint created with SSID %s and KEY %s and settings page http:///settings\r\n", AP_WIFI_SSID, AP_WIFI_KEY);
+  //} else 
+  //{    
+  //  Serial.printf("Could not create AccessPoint! %i\r\n", WiFi.status());
+ }
+ yield();
+}
+void stopSoftAp()
+{
+    Serial.println("Closing AccesPoint");
+    //wifiConnectionAttemps = 0;
+    //softApEnabled = 0;
+    //apActivationTime = 0;
+    WiFi.enableAP(false);
+}
+
+void checklastpoweroff()
+{
+  EEPROM.begin(1024); 
+  EEPROM.get(140, softApEnabled);  
+  softApEnabled = 1;
+  //debugStream.writeD("softApEnabled: %i",softApEnabled);
+  Serial.printf("softApEnabled: %i",softApEnabled);
+ if (softApEnabled =! 1) // set 1 if 0 
+ {
+  Serial.printf("Set softApEnabled: 1, was 0");
+  int eepromvalue = 1; 
+  EEPROM.put(140, eepromvalue) ;
+ }
+
+ EEPROM.commit();
+
+}
+
+void setchecklastpoweroff()
+{
+  if (millis() > checkpowerofftime && checklastpoweroffEnabled == false)
+  {
+    Serial.printf("Set softApEnabled 0 after checkpowerofftime");
+    EEPROM.begin(1024);
+     int eepromvalue = 0; 
+    EEPROM.put(140, eepromvalue) ;
+    EEPROM.commit();
+    checklastpoweroffEnabled = true; 
+  }
+}
+
+
+
+
+
+
 
 
 /********************************************************
    BLYNK define pins and read values
 ******************************************************/
 BLYNK_CONNECTED() {
-  if (Offlinemodus == 0 && BLYNK == 1) {
+  if (Offlinemodus == 0 && BLYNK == 1 && softApEnabled == 0) {
     Blynk.syncAll();
     //rtc.begin();
   }
@@ -659,7 +740,7 @@ void refreshTemp() {
         Temperatur_C = Sensor2.getTemp();
         //DEBUG_println(Temperatur_C);
        #endif
-      //Temperatur_C = 70;
+      Temperatur_C = 70;
       if (!checkSensor(Temperatur_C) && firstreading == 0) return;  //if sensor data is not valid, abort function; Sensor must be read at least one time at system startup
       Input = Temperatur_C;
       if (Brewdetection != 0) {
@@ -707,6 +788,7 @@ void initOfflineMode()
     EEPROM.get(110, aggbTv);
     EEPROM.get(120, brewtimersoftware);
     EEPROM.get(130, brewboarder);
+    // 140 check poweroff
   } else {
     #if DISPLAY != 0
       displayMessage("", "", "", "", "No eeprom,", "Values");
@@ -723,7 +805,7 @@ void initOfflineMode()
    abort function if offline, or brew is running
 *****************************************************/
 void checkWifi() {
-  if (Offlinemodus == 1 || brewcounter > 11) return;
+  if (Offlinemodus == 1 || brewcounter > 11 || softApEnabled == 1) return;
   do {
     if ((millis() - lastWifiConnectionAttempt >= wifiConnectionDelay) && (wifiReconnects <= maxWifiReconnects)) {
       int statusTemp = WiFi.status();
@@ -760,7 +842,7 @@ void checkWifi() {
    blynk is also using maxWifiReconnects!
 *****************************************************/
 void checkBlynk() {
-  if (Offlinemodus == 1 ||BLYNK == 0 || brewcounter > 11) return;
+  if (Offlinemodus == 1 ||BLYNK == 0 || brewcounter > 11 || softApEnabled == 1) return;
   if ((millis() - lastBlynkConnectionAttempt >= wifiConnectionDelay) && (blynkReCnctCount <= maxWifiReconnects)) {
     int statusTemp = Blynk.connected();
     if (statusTemp != 1) {   // check Blynk connection status
@@ -840,7 +922,7 @@ bool mqtt_publish(char *reading, char *payload)
 
 void sendToBlynkMQTT() 
 {
-  if (Offlinemodus == 1) return;
+  if (Offlinemodus == 1 || softApEnabled == 1) return;
 
   unsigned long currentMillisBlynk = millis();
   unsigned long currentMillisMQTT = millis();
@@ -1667,9 +1749,19 @@ void debugVerboseOutput()
 }
 
 void setup() {
-  DEBUGSTART(115200);
-  debugStream.setup();
 
+
+  DEBUGSTART(115200);
+  //debugStream.setup();
+
+  // power off set init
+  if (LOCALHOST == 1)
+  {
+   //check before set init poweroffvalue
+   //checklastpoweroff();
+  }
+  if (softApEnabled == 0)
+  {
   if (MQTT == 1) {
     //MQTT
     snprintf(topic_will, sizeof(topic_will), "%s%s/%s", mqtt_topic_prefix, hostname, "will");
@@ -1777,8 +1869,10 @@ void setup() {
   /********************************************************
      BLYNK & Fallback offline
   ******************************************************/
-  if (Offlinemodus == 0)
+  if (Offlinemodus == 0 && softApEnabled == 0)
   {
+    debugStream.writeD("Start Wifi");
+    Serial.printf("Start Wifi");
     #if defined(ESP8266)
       WiFi.hostname(hostname);
     #endif
@@ -1828,16 +1922,16 @@ void setup() {
  /********************************************************
     OWN Webside
  ******************************************************/
-  if (LOCALHOST == 1)
-  {
-  serverSetup();
-  }  
+  //if (LOCALHOST == 1 && softApEnabled == 0)
+  //{
+  //serverSetup();
+  //}  
 
  /******************************************************/
       delay(1000);
 
       //try blynk connection
-      if ( BLYNK == 1)
+      if ( BLYNK == 1 && softApEnabled == 0)
       {
         Blynk.config(auth, blynkaddress, blynkport) ;
         Blynk.connect(30000);
@@ -1931,7 +2025,7 @@ void setup() {
   /********************************************************
      OTA
   ******************************************************/
-  if (ota && Offlinemodus == 0 && WiFi.status() == WL_CONNECTED) {
+  if (ota && Offlinemodus == 0 && WiFi.status() == WL_CONNECTED && softApEnabled == 0) {
     ArduinoOTA.setHostname(OTAhost);  //  Device name for OTA
     ArduinoOTA.setPassword(OTApass);  //  Password for OTA
     ArduinoOTA.begin();
@@ -2039,16 +2133,33 @@ void setup() {
     timerAlarmWrite(timer, 10000, true);//m
     timerAlarmEnable(timer);//m
   #endif
-}
+} //softAP
+} //loop
 
-void loop() {
-  if (calibration_mode == 1 && TOF == 1) {
-      loopcalibrate();
-  } else {
+void loop() 
+{
+  if (calibration_mode == 1 && TOF == 1)
+  {
+    loopcalibrate();
+  } else if (softApEnabled == 1)
+  {
+       Serial.printf("Start AP");
+      #if defined(ESP8266)
+      timer1_disable();
+      #endif
+      #if defined(ESP32)
+      timerAlarmDisable(timer);
+      #endif
+      digitalWrite(pinRelayHeater, LOW); //Stop heating
+     createSoftAp();
+
+
+  } else
+  {
       looppid();
       debugStream.handle();
       debugVerboseOutput();
-    }
+  }
 }
 
 // TOF Calibration_mode
@@ -2090,7 +2201,7 @@ void loopcalibrate()
 void looppid()
 {
   //Only do Wifi stuff, if Wifi is connected
-  if (WiFi.status() == WL_CONNECTED && Offlinemodus == 0)
+  if (WiFi.status() == WL_CONNECTED && Offlinemodus == 0 && softApEnabled == 0 )
   {
     //MQTT
     if (MQTT == 1)
@@ -2101,6 +2212,8 @@ void looppid()
         mqtt.loop();
       }
     }
+  if (softApEnabled == 0 )
+  {
     ArduinoOTA.handle();  // For OTA
     // Disable interrupt it OTA is starting, otherwise it will not work
     ArduinoOTA.onStart([]()
@@ -2133,9 +2246,10 @@ void looppid()
         timerAlarmEnable(timer);
       #endif
     });
-
-    if (Blynk.connected() && BLYNK == 1)
-    {  // If connected run as normal
+  }
+  
+  if (Blynk.connected() && BLYNK == 1 && softApEnabled == 0 )
+  {  // If connected run as normal
       Blynk.run();
       blynkReCnctCount = 0; //reset blynk reconnects if connected
     } else
@@ -2172,6 +2286,10 @@ void looppid()
     #if (PRESSURESENSOR == 1)
     checkPressure();
     #endif
+  if (LOCALHOST == 1)
+  {
+   setchecklastpoweroff() ; //check if   
+  }
   brew();   //start brewing if button pressed
   checkSteamON(); // check for steam
   setEmergencyStopTemp();
